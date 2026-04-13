@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>双基项目里程碑总览</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div class="hero__main">
+          <p class="eyebrow">SHUANGJI PROJECT BOARD</p>
+          <h1>双基项目路线图</h1>
+          <p class="hero__subtitle">
+            以里程碑为核心的项目排程展示页，服务于内部评审、阶段汇报与跨角色协同对齐。
+          </p>
+        </div>
+        <div class="hero__meta">
+          <div class="source-note">DATA SOURCE / <span id="dataSourceLabel">milestones.csv</span></div>
+          <div class="serve-note" id="serveNote"></div>
+        </div>
+      </header>
+
+      <main id="appRoot" class="app-root is-loading">
+        <section class="loading-panel">
+          <div class="loading-panel__card">
+            <p>正在读取项目里程碑数据…</p>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <template id="overviewTemplate">
+      <section class="overview">
+        <section class="overview-strip board-panel">
+          <div class="info-strip">
+            <div class="info-cell">
+              <span class="meta-label">TIME RANGE</span>
+              <strong id="rangeLabel">-</strong>
+            </div>
+            <div class="info-cell">
+              <span class="meta-label">MILESTONES</span>
+              <strong id="milestoneCountLabel">-</strong>
+            </div>
+            <div class="info-cell">
+              <span class="meta-label">GROUPS</span>
+              <strong id="groupCountLabel">-</strong>
+            </div>
+            <div class="info-cell info-cell--status">
+              <span class="meta-label">STATUS</span>
+              <div class="status-summary">
+                <span><b id="statCompleted">0</b> 已完成</span>
+                <span><b id="statActive">0</b> 进行中</span>
+                <span><b id="statPending">0</b> 待启动</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="timeline-shell board-panel">
+          <div class="timeline-header">
+            <div class="timeline-header__left">
+              <p class="section-kicker">ROADMAP BOARD</p>
+              <h2>Milestones Schedule</h2>
+              <p>按月份查看里程碑区间，点击条带进入正式说明页。</p>
+            </div>
+            <div class="timeline-header__right">
+              <div class="legend-inline">
+                <div class="legend-cluster">
+                  <span class="section-label">STATUS</span>
+                  <div id="statusLegend" class="legend-list"></div>
+                </div>
+              </div>
+              <div class="filter-strip">
+                <span class="section-label">FILTER</span>
+                <div id="groupFilters" class="filter-chips"></div>
+              </div>
+              <div id="dataWarning" class="data-warning"></div>
+            </div>
+          </div>
+
+          <div class="timeline-layout">
+            <aside class="timeline-list" id="timelineList"></aside>
+            <section class="timeline-board">
+              <div id="monthHeader" class="month-header"></div>
+              <div id="timelineRows" class="timeline-rows"></div>
+            </section>
+          </div>
+        </section>
+      </section>
+    </template>
+
+    <template id="detailTemplate">
+      <section class="detail-view">
+        <div class="detail-topbar">
+          <button id="backButton" class="text-button" type="button">← 返回总览</button>
+          <div class="detail-nav">
+            <button id="prevButton" class="ghost-button" type="button">上一个</button>
+            <button id="nextButton" class="ghost-button" type="button">下一个</button>
+          </div>
+        </div>
+
+        <article class="detail-card board-panel">
+          <header class="detail-header">
+            <div>
+              <p class="eyebrow" id="detailGroupLabel">-</p>
+              <h2 id="detailTitle">-</h2>
+              <p id="detailSummary" class="detail-summary">-</p>
+            </div>
+            <div class="detail-badges">
+              <span id="detailGroupBadge" class="badge badge--group">-</span>
+              <span id="detailStatusBadge" class="badge badge--status">-</span>
+            </div>
+          </header>
+
+          <section class="detail-grid">
+            <div class="info-block">
+              <span class="section-label">所属阶段</span>
+              <p id="detailPhase">-</p>
+            </div>
+            <div class="info-block">
+              <span class="section-label">起止时间</span>
+              <p id="detailDateRange">-</p>
+            </div>
+            <div class="info-block">
+              <span class="section-label">负责人</span>
+              <p id="detailOwner">-</p>
+            </div>
+            <div class="info-block">
+              <span class="section-label">备注</span>
+              <p id="detailRemarks">-</p>
+            </div>
+          </section>
+
+          <section class="detail-sections">
+            <div class="content-panel">
+              <span class="section-label">目标 Objective</span>
+              <p id="detailObjective">-</p>
+            </div>
+            <div class="content-panel">
+              <span class="section-label">包含内容 Scope</span>
+              <ul id="detailScope" class="content-list"></ul>
+            </div>
+            <div class="content-panel">
+              <span class="section-label">交付物 Deliverables</span>
+              <ul id="detailDeliverables" class="content-list"></ul>
+            </div>
+            <div class="content-panel">
+              <span class="section-label">依赖 Dependencies</span>
+              <ul id="detailDependencies" class="content-list"></ul>
+            </div>
+            <div class="content-panel">
+              <span class="section-label">风险 Risks</span>
+              <ul id="detailRisks" class="content-list"></ul>
+            </div>
+          </section>
+        </article>
+      </section>
+    </template>
+
+    <template id="emptyStateTemplate">
+      <section class="loading-panel">
+        <div class="loading-panel__card board-panel">
+          <p id="emptyMessage">暂无可展示数据。</p>
+        </div>
+      </section>
+    </template>
+
+    <div id="tooltip" class="tooltip" hidden></div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
