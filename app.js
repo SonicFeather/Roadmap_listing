@@ -79,7 +79,7 @@ async function init() {
         : "当前为 CSV 文件直读模式；若浏览器对 file:// 受限，可通过轻量静态服务器访问。";
 
     const parsed = normalizeMilestones(parseCsv(loadResult.csvText));
-    const sorted = parsed.sort((a, b) => a.orderNo - b.orderNo);
+    const sorted = parsed.sort(compareByStartDate);
     appState.allMilestones = sorted;
     appState.visibleMilestones = sorted.filter(isSchedulable);
     appState.incompleteMilestones = sorted.filter((item) => !isSchedulable(item));
@@ -99,6 +99,20 @@ async function init() {
   } finally {
     appRoot.classList.remove("is-loading");
   }
+}
+
+function compareByStartDate(a, b) {
+  const aTime = a.startDate ? a.startDate.getTime() : Number.POSITIVE_INFINITY;
+  const bTime = b.startDate ? b.startDate.getTime() : Number.POSITIVE_INFINITY;
+  if (aTime !== bTime) {
+    return aTime - bTime;
+  }
+  const aEnd = a.endDate ? a.endDate.getTime() : Number.POSITIVE_INFINITY;
+  const bEnd = b.endDate ? b.endDate.getTime() : Number.POSITIVE_INFINITY;
+  if (aEnd !== bEnd) {
+    return aEnd - bEnd;
+  }
+  return (a.orderNo || 0) - (b.orderNo || 0);
 }
 
 async function loadMilestones() {
@@ -464,38 +478,85 @@ function createRoadmapTimelineRow(item) {
 
   const axis = computeAxisPlacement(item.startDate, item.endDate);
   const widthPx = axis.widthDays * PX_PER_DAY;
+  const barWidthPx = Math.max(18, widthPx);
+  const density = getBarDensity(barWidthPx);
+  const leftPx = axis.offsetDays * PX_PER_DAY;
+
+  // 极短条带：使用“短条 + 右侧完整名称”的一体化组件（同一个按钮、同一行、同一垂直中心）
+  if (density.variant === "inlineLabel") {
+    const wrap = document.createElement("button");
+    wrap.type = "button";
+    wrap.className = "roadmap-inline-wrap";
+    wrap.dataset.status = item.status;
+    wrap.dataset.milestoneId = item.id;
+    wrap.style.left = `${leftPx}px`;
+    wrap.setAttribute("aria-label", `${item.id} ${item.fullTitle || item.title || ""}`.trim());
+
+    const inlineBar = document.createElement("span");
+    inlineBar.className = `roadmap-inline-bar roadmap-bar--${item.groupMeta.className}`;
+    inlineBar.dataset.status = item.status;
+    inlineBar.style.width = `${Math.max(18, barWidthPx)}px`;
+
+    const statusDot = document.createElement("span");
+    statusDot.className = "status-dot";
+    statusDot.style.color = STATUS_COLORS[item.status];
+    inlineBar.appendChild(statusDot);
+
+    const inlineLabel = document.createElement("span");
+    inlineLabel.className = "roadmap-inline-label";
+    inlineLabel.textContent = item.barTitle || `${item.id} ${item.shortTitle || item.fullTitle || ""}`.trim();
+
+    wrap.appendChild(inlineBar);
+    wrap.appendChild(inlineLabel);
+
+    bindMilestoneInteraction(wrap, item);
+    row.appendChild(wrap);
+    return row;
+  }
+
   const bar = document.createElement("button");
   bar.type = "button";
   bar.className = `roadmap-bar roadmap-bar--${item.groupMeta.className}`;
   bar.dataset.status = item.status;
-  bar.style.left = `${axis.offsetDays * PX_PER_DAY}px`;
-  bar.style.width = `${Math.max(18, widthPx)}px`;
+  bar.style.left = `${leftPx}px`;
+  bar.style.width = `${barWidthPx}px`;
+  bar.classList.add(density.className);
+  bar.setAttribute("aria-label", `${item.id} ${item.fullTitle || item.title || ""}`.trim());
 
-  const statusDot = document.createElement("span");
-  statusDot.className = "status-dot";
-  statusDot.style.color = STATUS_COLORS[item.status];
-  bar.appendChild(statusDot);
+  if (density.showDot) {
+    const statusDot = document.createElement("span");
+    statusDot.className = "status-dot";
+    statusDot.style.color = STATUS_COLORS[item.status];
+    bar.appendChild(statusDot);
+  }
 
-  const label = document.createElement("span");
-  label.className = "roadmap-bar__text";
-  label.textContent = getRoadmapBarText(item, widthPx);
-  bar.appendChild(label);
+  if (density.showText) {
+    const label = document.createElement("span");
+    label.className = "roadmap-bar__text";
+    label.textContent = getRoadmapBarText(item, barWidthPx);
+    bar.appendChild(label);
+  }
 
-  bar.addEventListener("click", () => {
-    const nextHash = `milestone=${encodeURIComponent(item.id)}`;
-    if (window.location.hash === `#${nextHash}`) {
-      openDrawer(item);
-      return;
-    }
-    window.location.hash = nextHash;
-  });
-  bar.addEventListener("mouseenter", (event) => showTooltip(event, buildTooltipContent(item)));
-  bar.addEventListener("mousemove", moveTooltip);
-  bar.addEventListener("mouseleave", hideTooltip);
-  bar.addEventListener("blur", hideTooltip);
-
+  bindMilestoneInteraction(bar, item);
   row.appendChild(bar);
   return row;
+}
+
+function getBarDensity(widthPx) {
+  // inlineLabel: 极短，保持圆点 + 极短条身，并在右侧展示完整名称（同一组件）
+  if (widthPx < 44) {
+    return { variant: "inlineLabel", className: "is-inline-label", showDot: false, showText: false };
+  }
+  // short: 短条，只显示编号，不显示圆点，减少 padding/装饰
+  if (widthPx < 86) {
+    return { variant: "bar", className: "is-short", showDot: false, showText: true };
+  }
+  // compact: 中等宽度，显示编号 + 极短关键词
+  if (widthPx < 140) {
+    return { variant: "bar", className: "is-compact", showDot: true, showText: true };
+  }
+  // normal: 宽条，显示 barTitle
+  return { variant: "bar", className: "is-normal", showDot: true, showText: true };
 }
 
 function setRoadmapAxisVars() {
@@ -551,20 +612,52 @@ function minDate(a, b) {
 }
 
 function getRoadmapBarText(item, widthPx) {
-  const compact = `${item.id} ${String(item.shortTitle || "").slice(0, 8)}`.trim();
-  const normal = `${item.id} ${item.shortTitle || item.fullTitle || ""}`.trim();
-  const bar = item.barTitle || compact;
+  const id = item.id;
+  const full = `${id} ${item.shortTitle || item.fullTitle || ""}`.trim();
+  const bar = item.barTitle || full;
+  const keyword = `${id} ${getBarKeyword(item)}`.trim();
 
-  if (widthPx < 62) {
-    return item.id;
+  // 极短条带：由 inlineLabel 组件承载，不在条带里显示文字
+  if (widthPx < 44) {
+    return "";
   }
-  if (widthPx < 110) {
-    return compact;
+
+  // 短条带：只显示编号（信息交给 tooltip / 详情）
+  if (widthPx < 86) {
+    return id;
   }
-  if (widthPx < 180) {
-    return bar;
+
+  // 中等宽度：编号 + 极短关键词
+  if (widthPx < 140) {
+    return keyword || id;
   }
-  return normal;
+
+  // 宽条带：编号 + 短标题（barTitle）
+  return bar;
+}
+
+function getBarKeyword(item) {
+  const source = String(item.shortTitle || item.fullTitle || "").trim();
+  if (!source) {
+    return "";
+  }
+  // 取前若干字符作为“极短关键词”，避免外置长文本导致画面破碎
+  return source.slice(0, 6);
+}
+
+function bindMilestoneInteraction(element, item) {
+  element.addEventListener("click", () => {
+    const nextHash = `milestone=${encodeURIComponent(item.id)}`;
+    if (window.location.hash === `#${nextHash}`) {
+      openDrawer(item);
+      return;
+    }
+    window.location.hash = nextHash;
+  });
+  element.addEventListener("mouseenter", (event) => showTooltip(event, buildTooltipContent(item)));
+  element.addEventListener("mousemove", moveTooltip);
+  element.addEventListener("mouseleave", hideTooltip);
+  element.addEventListener("blur", hideTooltip);
 }
 
 function createRoadmapTag(text, className) {

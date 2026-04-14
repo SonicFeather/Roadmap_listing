@@ -804,6 +804,68 @@ button {
   overflow: hidden;
 }
 
+.roadmap-bar.is-compact {
+  padding: 0 6px;
+  gap: 5px;
+}
+
+.roadmap-bar.is-short {
+  padding: 0 4px;
+  gap: 0;
+  justify-content: center;
+}
+
+.roadmap-bar.is-short .roadmap-bar__text {
+  font-size: 0.74rem;
+}
+
+.roadmap-inline-wrap {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  margin-top: auto;
+  margin-bottom: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  min-width: 0;
+}
+
+.roadmap-inline-wrap:hover {
+  transform: translate(-2px, -2px);
+}
+
+.roadmap-inline-wrap:focus-visible {
+  outline: 3px solid #000;
+  outline-offset: 2px;
+}
+
+.roadmap-inline-bar {
+  height: var(--roadmap-bar-height);
+  border: 2px solid var(--line);
+  box-shadow: var(--hard-shadow-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.roadmap-inline-label {
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
+  white-space: nowrap;
+  overflow: visible;
+}
+
 .roadmap-bar:hover {
   transform: translate(-2px, -2px);
 }
