@@ -80,12 +80,82 @@
             </div>
           </div>
 
-          <div class="timeline-layout">
-            <aside class="timeline-list" id="timelineList"></aside>
-            <section class="timeline-board">
-              <div id="monthHeader" class="month-header"></div>
-              <div id="timelineRows" class="timeline-rows"></div>
+          <div class="roadmap-board">
+            <section
+              class="roadmap-grid-shell"
+              id="roadmapGridShell"
+              aria-label="Milestone roadmap table"
+            >
+              <div class="roadmap-corner-cell" aria-hidden="true">
+                <span class="corner-title">MILESTONE</span>
+              </div>
+              <div id="monthHeader" class="roadmap-month-header" role="row"></div>
+              <aside class="roadmap-left-col" id="timelineList" aria-label="Milestone index"></aside>
+              <section class="roadmap-timeline-body" id="timelineRows" aria-label="Timeline body"></section>
             </section>
+
+            <aside class="milestone-drawer" id="milestoneDrawer" hidden>
+              <div class="milestone-drawer__top">
+                <button id="drawerCloseButton" class="ghost-button" type="button">关闭</button>
+                <div class="milestone-drawer__nav">
+                  <button id="drawerPrevButton" class="ghost-button" type="button">上一个</button>
+                  <button id="drawerNextButton" class="ghost-button" type="button">下一个</button>
+                </div>
+              </div>
+
+              <div class="milestone-drawer__content">
+                <p class="eyebrow" id="drawerEyebrow">-</p>
+                <h3 class="drawer-title" id="drawerTitle">-</h3>
+                <p class="drawer-summary" id="drawerSummary">-</p>
+
+                <div class="drawer-badges">
+                  <span id="drawerGroupBadge" class="badge badge--group">-</span>
+                  <span id="drawerStatusBadge" class="badge badge--status">-</span>
+                </div>
+
+                <div class="drawer-meta">
+                  <div class="drawer-meta__row">
+                    <span class="section-label">所属阶段</span>
+                    <p id="drawerPhase">-</p>
+                  </div>
+                  <div class="drawer-meta__row">
+                    <span class="section-label">起止时间</span>
+                    <p id="drawerDateRange">-</p>
+                  </div>
+                  <div class="drawer-meta__row">
+                    <span class="section-label">负责人</span>
+                    <p id="drawerOwner">-</p>
+                  </div>
+                  <div class="drawer-meta__row">
+                    <span class="section-label">备注</span>
+                    <p id="drawerRemarks">-</p>
+                  </div>
+                </div>
+
+                <div class="drawer-sections">
+                  <div class="content-panel">
+                    <span class="section-label">目标 Objective</span>
+                    <p id="drawerObjective">-</p>
+                  </div>
+                  <div class="content-panel">
+                    <span class="section-label">包含内容 Scope</span>
+                    <ul id="drawerScope" class="content-list"></ul>
+                  </div>
+                  <div class="content-panel">
+                    <span class="section-label">交付物 Deliverables</span>
+                    <ul id="drawerDeliverables" class="content-list"></ul>
+                  </div>
+                  <div class="content-panel">
+                    <span class="section-label">依赖 Dependencies</span>
+                    <ul id="drawerDependencies" class="content-list"></ul>
+                  </div>
+                  <div class="content-panel">
+                    <span class="section-label">风险 Risks</span>
+                    <ul id="drawerRisks" class="content-list"></ul>
+                  </div>
+                </div>
+              </div>
+            </aside>
           </div>
         </section>
       </section>

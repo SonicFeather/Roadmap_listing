@@ -38,6 +38,8 @@ const TIMELINE_RANGE = {
   start: new Date(2026, 2, 1),
   end: new Date(2026, 11, 20),
 };
+const MS_PER_DAY = 86400000;
+const PX_PER_DAY = 7;
 const EMBEDDED_CSV = `id,project_group,group_color_key,title,phase,start_date,end_date,status,summary,objective,scope,deliverables,dependencies,risks,owner,remarks,order_no
 M1,上架,listing,上架流程与后台信息上架梳理完成,基础建设阶段,2026-03-01,2026-03-25,已完成,完成后台信息上架链路梳理与问题识别，明确本项目的核心业务边界。,明确当前新品上架流程中后台信息上架的真实路径、参与角色、痛点与系统边界，为后续数据建模和系统建设提供业务基础。,后台信息上架流程梳理|参与角色与职责梳理|现状痛点识别|业务边界确认|上架输入输出节点梳理,后台信息上架流程图|角色分工说明|问题清单|项目边界说明,,流程仍可能继续变化|不同团队口径不一致|现有操作存在隐性步骤未被识别,产品+业务,作为项目启动阶段的前置成果，已完成。,1
 M2,上架,listing,数据建模与字段治理体系完成,基础建设阶段,2026-03-10,2026-04-05,已完成,完成上架场景的数据模型、字段标准与输出映射设计。,建立可支撑上架场景的数据标准体系，使字段能够统一管理来源、去向、层级、审核方式和输出结构。,商品数据语义整理|SSOT字段体系设计|输出映射设计|对象结构设计|option体系设计|输出结构设计,ssot_fields定义表|output_mapping映射表|object_schema对象结构说明|option_definition配置说明|output_layout输出结构文档,M1,字段定义反复调整|来源表单不稳定|历史字段命名不统一,产品+数据,该里程碑为后续前后端和AI工作流的基础。,2
@@ -56,9 +58,11 @@ const appState = {
   allMilestones: [],
   visibleMilestones: [],
   incompleteMilestones: [],
-  activeGroups: new Set(),
+  /** null = 显示全部分组；否则为 group_color_key（如 listing / social） */
+  groupFilterKey: null,
   allGroups: [],
   sourceLabel: DEFAULT_SOURCE_LABEL,
+  currentBoardItems: [],
 };
 
 document.addEventListener("DOMContentLoaded", init);
@@ -80,7 +84,7 @@ async function init() {
     appState.visibleMilestones = sorted.filter(isSchedulable);
     appState.incompleteMilestones = sorted.filter((item) => !isSchedulable(item));
     appState.allGroups = [...new Set(appState.allMilestones.map((item) => item.group_color_key).filter(Boolean))];
-    appState.activeGroups = new Set(appState.allGroups);
+    appState.groupFilterKey = null;
 
     if (!appState.allMilestones.length) {
       renderEmpty("CSV 已读取，但没有可用的里程碑数据。");
@@ -183,6 +187,7 @@ function parseCsv(text) {
 function normalizeMilestones(records) {
   return records.map((record) => {
     const normalized = { ...record };
+    normalized.id = String(normalized.id || "").trim();
     normalized.orderNo = Number.parseInt(record.order_no, 10) || Number.MAX_SAFE_INTEGER;
     normalized.startDate = parseDate(record.start_date);
     normalized.endDate = parseDate(record.end_date);
@@ -243,27 +248,39 @@ function bindGlobalEvents() {
   window.addEventListener("hashchange", renderRoute);
   window.addEventListener("resize", () => {
     hideTooltip();
-    syncTimelineRowHeights();
+    requestAnimationFrame(() => syncRoadmapRowHeights());
   });
-  window.addEventListener("load", syncTimelineRowHeights);
 }
 
 function renderRoute() {
-  const milestoneId = getMilestoneIdFromHash();
-  if (milestoneId) {
-    const current = appState.allMilestones.find((item) => item.id === milestoneId);
-    if (current) {
-      renderDetail(current);
-      return;
-    }
-  }
   renderOverview();
+  syncDrawerFromHash();
 }
 
 function getMilestoneIdFromHash() {
-  const hash = window.location.hash.replace(/^#/, "");
-  const params = new URLSearchParams(hash);
-  return params.get("milestone");
+  const raw = window.location.hash.replace(/^#/, "").trim();
+  if (!raw) {
+    return null;
+  }
+  const query = raw.startsWith("?") ? raw.slice(1) : raw;
+  try {
+    const params = new URLSearchParams(query);
+    const fromParams = params.get("milestone");
+    if (fromParams) {
+      return fromParams;
+    }
+  } catch {
+    /* fall through */
+  }
+  const match = query.match(/(?:^|&)milestone=([^&]+)/);
+  if (!match) {
+    return null;
+  }
+  try {
+    return decodeURIComponent(match[1].replace(/\+/g, " "));
+  } catch {
+    return match[1];
+  }
 }
 
 function renderOverview() {
@@ -273,17 +290,19 @@ function renderOverview() {
   appRoot.appendChild(template.content.cloneNode(true));
 
   const visibleItems = getFilteredMilestones();
+  appState.currentBoardItems = visibleItems;
   fillOverviewMeta(visibleItems);
   renderGroupFilters();
   renderStatusLegend();
   renderTimeline(visibleItems);
+  bindDrawerEvents();
 }
 
 function getFilteredMilestones() {
-  if (!appState.activeGroups.size) {
+  if (appState.groupFilterKey == null || appState.groupFilterKey === "") {
     return appState.visibleMilestones;
   }
-  return appState.visibleMilestones.filter((item) => appState.activeGroups.has(item.group_color_key));
+  return appState.visibleMilestones.filter((item) => item.group_color_key === appState.groupFilterKey);
 }
 
 function fillOverviewMeta(items) {
@@ -310,19 +329,18 @@ function renderGroupFilters() {
     const meta = getGroupMeta(groupKey);
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `filter-chip ${appState.activeGroups.has(groupKey) ? "is-active" : ""}`;
+    const chipActive =
+      appState.groupFilterKey === null || appState.groupFilterKey === groupKey;
+    button.className = `filter-chip ${chipActive ? "is-active" : ""}`;
     button.textContent = meta.label;
+    button.dataset.groupKey = groupKey;
     button.addEventListener("click", () => {
-      if (appState.activeGroups.has(groupKey)) {
-        appState.activeGroups.delete(groupKey);
+      if (appState.groupFilterKey === groupKey) {
+        appState.groupFilterKey = null;
       } else {
-        appState.activeGroups.add(groupKey);
+        appState.groupFilterKey = groupKey;
       }
-
-      if (!appState.activeGroups.size) {
-        groups.forEach((key) => appState.activeGroups.add(key));
-      }
-      renderOverview();
+      renderRoute();
     });
     container.appendChild(button);
   });
@@ -358,16 +376,12 @@ function renderTimeline(items) {
   list.innerHTML = "";
   rows.innerHTML = "";
 
-  getMonthLabels(TIMELINE_RANGE.start, TIMELINE_RANGE.end).forEach((monthLabel) => {
-    const cell = document.createElement("div");
-    cell.className = "month-cell";
-    cell.textContent = monthLabel;
-    monthHeader.appendChild(cell);
-  });
+  setRoadmapAxisVars();
+  buildMonthHeader(monthHeader, TIMELINE_RANGE.start, TIMELINE_RANGE.end);
 
   items.forEach((item) => {
-    list.appendChild(createListRow(item));
-    rows.appendChild(createTimelineRow(item));
+    list.appendChild(createRoadmapLeftRow(item));
+    rows.appendChild(createRoadmapTimelineRow(item));
   });
 
   if (!items.length) {
@@ -386,28 +400,40 @@ function renderTimeline(items) {
   }
 
   requestAnimationFrame(() => {
-    syncTimelineRowHeights();
-    requestAnimationFrame(syncTimelineRowHeights);
+    syncRoadmapRowHeights();
+    requestAnimationFrame(() => syncRoadmapRowHeights());
   });
 }
 
-function createListRow(item) {
-  const row = document.createElement("div");
-  row.className = "timeline-list-row";
+function createRoadmapLeftRow(item) {
+  const row = document.createElement("button");
+  row.type = "button";
+  row.className = "roadmap-left-row";
+  row.dataset.milestoneId = item.id;
+  row.addEventListener("click", () => {
+    const nextHash = `milestone=${encodeURIComponent(item.id)}`;
+    if (window.location.hash === `#${nextHash}`) {
+      openDrawer(item);
+      return;
+    }
+    window.location.hash = nextHash;
+  });
 
-  const title = document.createElement("strong");
-  title.textContent = item.shortTitle || item.title;
+  const title = document.createElement("div");
+  title.className = "roadmap-left-row__title";
+  title.textContent = item.shortTitle || item.title || item.fullTitle;
   row.appendChild(title);
 
-  const detail = document.createElement("small");
-  detail.textContent = `${item.phase || "未填写阶段"} / ${formatDate(item.startDate)} - ${formatDate(item.endDate)}`;
-  row.appendChild(detail);
-
   const meta = document.createElement("div");
-  meta.className = "timeline-row__meta";
-  meta.appendChild(createPill(item.groupMeta.label, `group-pill group-pill--${item.groupMeta.className}`));
-  meta.appendChild(createStatusPill(item.status));
+  meta.className = "roadmap-left-row__meta";
+  meta.textContent = `${item.phase || "未填写阶段"} / ${formatDate(item.startDate)} - ${formatDate(item.endDate)}`;
   row.appendChild(meta);
+
+  const tags = document.createElement("div");
+  tags.className = "roadmap-left-row__tags";
+  tags.appendChild(createRoadmapTag(item.groupMeta.label, `roadmap-tag roadmap-tag--${item.groupMeta.className}`));
+  tags.appendChild(createRoadmapStatusTag(item.status));
+  row.appendChild(tags);
 
   return row;
 }
@@ -431,18 +457,19 @@ function createStatusPill(status) {
   return pill;
 }
 
-function createTimelineRow(item) {
+function createRoadmapTimelineRow(item) {
   const row = document.createElement("div");
-  row.className = "timeline-row";
+  row.className = "roadmap-row";
+  row.dataset.milestoneId = item.id;
 
+  const axis = computeAxisPlacement(item.startDate, item.endDate);
+  const widthPx = axis.widthDays * PX_PER_DAY;
   const bar = document.createElement("button");
   bar.type = "button";
-  bar.className = `timeline-bar timeline-bar--${item.groupMeta.className}`;
+  bar.className = `roadmap-bar roadmap-bar--${item.groupMeta.className}`;
   bar.dataset.status = item.status;
-  const span = Math.max(calculateSpan(item.startDate, item.endDate), 5.4);
-  const approxWidth = Math.max(164, (span / 100) * 1120);
-  bar.style.left = `${calculateOffset(item.startDate)}%`;
-  bar.style.width = `${span}%`;
+  bar.style.left = `${axis.offsetDays * PX_PER_DAY}px`;
+  bar.style.width = `${Math.max(18, widthPx)}px`;
 
   const statusDot = document.createElement("span");
   statusDot.className = "status-dot";
@@ -450,13 +477,17 @@ function createTimelineRow(item) {
   bar.appendChild(statusDot);
 
   const label = document.createElement("span");
-  label.className = "timeline-bar__label";
-  label.textContent = getTimelineDisplayTitle(item, approxWidth);
-  label.title = `${item.id} ${item.fullTitle}`;
+  label.className = "roadmap-bar__text";
+  label.textContent = getRoadmapBarText(item, widthPx);
   bar.appendChild(label);
 
   bar.addEventListener("click", () => {
-    window.location.hash = `milestone=${encodeURIComponent(item.id)}`;
+    const nextHash = `milestone=${encodeURIComponent(item.id)}`;
+    if (window.location.hash === `#${nextHash}`) {
+      openDrawer(item);
+      return;
+    }
+    window.location.hash = nextHash;
   });
   bar.addEventListener("mouseenter", (event) => showTooltip(event, buildTooltipContent(item)));
   bar.addEventListener("mousemove", moveTooltip);
@@ -467,85 +498,240 @@ function createTimelineRow(item) {
   return row;
 }
 
-function calculateOffset(startDate) {
-  const total = TIMELINE_RANGE.end.getTime() - TIMELINE_RANGE.start.getTime();
-  const current = clamp(startDate.getTime(), TIMELINE_RANGE.start.getTime(), TIMELINE_RANGE.end.getTime());
-  return ((current - TIMELINE_RANGE.start.getTime()) / total) * 100;
+function setRoadmapAxisVars() {
+  const totalDays = daysBetweenInclusive(TIMELINE_RANGE.start, TIMELINE_RANGE.end);
+  const widthPx = totalDays * PX_PER_DAY;
+  document.documentElement.style.setProperty("--roadmap-timeline-width", `${widthPx}px`);
+  document.documentElement.style.setProperty("--roadmap-px-per-day", `${PX_PER_DAY}px`);
 }
 
-function calculateSpan(startDate, endDate) {
-  const total = TIMELINE_RANGE.end.getTime() - TIMELINE_RANGE.start.getTime();
-  const end = clamp(endDate.getTime(), TIMELINE_RANGE.start.getTime(), TIMELINE_RANGE.end.getTime());
-  const start = clamp(startDate.getTime(), TIMELINE_RANGE.start.getTime(), TIMELINE_RANGE.end.getTime());
-  return (((end - start) || 86400000) / total) * 100;
-}
-
-function clamp(value, min, max) {
-  return Math.min(Math.max(value, min), max);
-}
-
-function getMonthLabels(startDate, endDate) {
-  const labels = [];
+function buildMonthHeader(container, startDate, endDate) {
   const cursor = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
   while (cursor <= endDate) {
-    labels.push(`${cursor.getMonth() + 1}月`);
+    const monthStart = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
+    const monthEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0);
+    const segStart = maxDate(monthStart, startDate);
+    const segEnd = minDate(monthEnd, endDate);
+    if (segEnd >= segStart) {
+      const days = daysBetweenInclusive(segStart, segEnd);
+      const cell = document.createElement("div");
+      cell.className = "roadmap-month-cell";
+      cell.textContent = `${cursor.getMonth() + 1}月`;
+      cell.style.width = `${days * PX_PER_DAY}px`;
+      container.appendChild(cell);
+    }
     cursor.setMonth(cursor.getMonth() + 1);
   }
-  return labels;
 }
 
-function renderDetail(item) {
-  const appRoot = document.getElementById("appRoot");
-  const template = document.getElementById("detailTemplate");
-  appRoot.innerHTML = "";
-  appRoot.appendChild(template.content.cloneNode(true));
+function computeAxisPlacement(taskStart, taskEnd) {
+  const start = maxDate(TIMELINE_RANGE.start, taskStart);
+  const end = minDate(TIMELINE_RANGE.end, taskEnd);
+  const offsetDays = Math.max(0, daysBetweenInclusive(TIMELINE_RANGE.start, start) - 1);
+  const widthDays = end.getTime() >= start.getTime() ? Math.max(1, daysBetweenInclusive(start, end)) : 1;
+  return { offsetDays, widthDays };
+}
 
-  const currentIndex = appState.allMilestones.findIndex((entry) => entry.id === item.id);
-  const prevItem = appState.allMilestones[currentIndex - 1] || null;
-  const nextItem = appState.allMilestones[currentIndex + 1] || null;
+function startOfDay(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
 
-  document.getElementById("detailGroupLabel").textContent = `${item.id} · ${item.project_group || item.groupMeta.label}`;
-  document.getElementById("detailTitle").textContent = item.fullTitle || "-";
-  document.getElementById("detailSummary").textContent = item.summary || "暂无简要说明。";
-  document.getElementById("detailGroupBadge").textContent = item.project_group || item.groupMeta.label;
-  document.getElementById("detailGroupBadge").dataset.group = item.group_color_key || item.groupMeta.className;
-  document.getElementById("detailStatusBadge").textContent = item.status;
-  document.getElementById("detailStatusBadge").dataset.status = item.status;
-  document.getElementById("detailPhase").textContent = item.phase || "未填写";
-  document.getElementById("detailDateRange").textContent = `${formatDate(item.startDate)} - ${formatDate(item.endDate)}`;
-  document.getElementById("detailOwner").textContent = item.owner || "未填写";
-  document.getElementById("detailRemarks").textContent = item.remarks || "无";
-  document.getElementById("detailObjective").textContent = item.objective || "暂无目标说明。";
+function daysBetweenInclusive(startDate, endDate) {
+  const start = startOfDay(startDate);
+  const end = startOfDay(endDate);
+  return Math.round((end.getTime() - start.getTime()) / MS_PER_DAY) + 1;
+}
 
-  fillList("detailScope", item.scopeList, "暂无范围说明");
-  fillList("detailDeliverables", item.deliverablesList, "暂无交付物说明");
-  fillList("detailDependencies", item.dependenciesList, "暂无依赖项");
-  fillList("detailRisks", item.risksList, "暂无风险说明");
+function maxDate(a, b) {
+  return a.getTime() >= b.getTime() ? a : b;
+}
 
-  document.getElementById("backButton").addEventListener("click", () => {
-    window.location.hash = "";
+function minDate(a, b) {
+  return a.getTime() <= b.getTime() ? a : b;
+}
+
+function getRoadmapBarText(item, widthPx) {
+  const compact = `${item.id} ${String(item.shortTitle || "").slice(0, 8)}`.trim();
+  const normal = `${item.id} ${item.shortTitle || item.fullTitle || ""}`.trim();
+  const bar = item.barTitle || compact;
+
+  if (widthPx < 62) {
+    return item.id;
+  }
+  if (widthPx < 110) {
+    return compact;
+  }
+  if (widthPx < 180) {
+    return bar;
+  }
+  return normal;
+}
+
+function createRoadmapTag(text, className) {
+  const tag = document.createElement("span");
+  tag.className = `${className} roadmap-tag--group`.replace(/\s+/g, " ").trim();
+  tag.textContent = text;
+  return tag;
+}
+
+function createRoadmapStatusTag(status) {
+  const tag = document.createElement("span");
+  tag.className = "roadmap-tag roadmap-tag--status";
+  tag.dataset.status = status;
+  const dot = document.createElement("span");
+  dot.className = "status-dot";
+  dot.style.color = STATUS_COLORS[status];
+  tag.appendChild(dot);
+  tag.appendChild(document.createTextNode(status));
+  return tag;
+}
+
+function bindDrawerEvents() {
+  const drawer = document.getElementById("milestoneDrawer");
+  if (!drawer) {
+    return;
+  }
+  const closeButton = document.getElementById("drawerCloseButton");
+  closeButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (window.location.hash) {
+      window.location.hash = "";
+    }
+    closeDrawer();
   });
+}
 
-  const prevButton = document.getElementById("prevButton");
-  const nextButton = document.getElementById("nextButton");
+function syncDrawerFromHash() {
+  const milestoneId = getMilestoneIdFromHash();
+  if (!milestoneId) {
+    closeDrawer();
+    return;
+  }
+  const inFilteredBoard = appState.currentBoardItems.some((item) => item.id === milestoneId);
+  if (!inFilteredBoard) {
+    if (window.location.hash) {
+      window.location.hash = "";
+    }
+    closeDrawer();
+    return;
+  }
+  const current = appState.allMilestones.find((item) => item.id === milestoneId);
+  if (!current || !isSchedulable(current)) {
+    closeDrawer();
+    return;
+  }
+  openDrawer(current);
+}
 
+function openDrawer(item) {
+  const drawer = document.getElementById("milestoneDrawer");
+  if (!drawer) {
+    return;
+  }
+  drawer.hidden = false;
+
+  const list = appState.currentBoardItems.length ? appState.currentBoardItems : appState.visibleMilestones;
+  const index = list.findIndex((entry) => entry.id === item.id);
+  const prevItem = index > 0 ? list[index - 1] : null;
+  const nextItem = index >= 0 && index < list.length - 1 ? list[index + 1] : null;
+
+  setMilestoneSelection(item.id);
+
+  const titleText = item.fullTitle || item.title || "-";
+  const summaryText = item.summary && String(item.summary).trim() ? item.summary : "-";
+  const objectiveText = item.objective && String(item.objective).trim() ? item.objective : "-";
+  const phaseText = item.phase && String(item.phase).trim() ? item.phase : "-";
+  const ownerText = item.owner && String(item.owner).trim() ? item.owner : "-";
+  const remarksText = item.remarks && String(item.remarks).trim() ? item.remarks : "-";
+
+  document.getElementById("drawerEyebrow").textContent = `${item.id} · ${item.project_group || item.groupMeta.label}`;
+  document.getElementById("drawerTitle").textContent = titleText;
+  document.getElementById("drawerSummary").textContent = summaryText;
+  document.getElementById("drawerGroupBadge").textContent = item.project_group || item.groupMeta.label;
+  document.getElementById("drawerGroupBadge").dataset.group = item.group_color_key || item.groupMeta.className;
+  document.getElementById("drawerStatusBadge").textContent = item.status;
+  document.getElementById("drawerStatusBadge").dataset.status = item.status;
+  document.getElementById("drawerPhase").textContent = phaseText;
+  document.getElementById("drawerDateRange").textContent = `${formatDate(item.startDate)} - ${formatDate(item.endDate)}`;
+  document.getElementById("drawerOwner").textContent = ownerText;
+  document.getElementById("drawerRemarks").textContent = remarksText;
+  document.getElementById("drawerObjective").textContent = objectiveText;
+
+  fillList("drawerScope", item.scopeList || [], "-");
+  fillList("drawerDeliverables", item.deliverablesList || [], "-");
+  fillList("drawerDependencies", item.dependenciesList || [], "-");
+  fillList("drawerRisks", item.risksList || [], "-");
+
+  const prevButton = document.getElementById("drawerPrevButton");
+  const nextButton = document.getElementById("drawerNextButton");
   prevButton.disabled = !prevItem;
   nextButton.disabled = !nextItem;
 
-  if (prevItem) {
-    prevButton.addEventListener("click", () => {
-      window.location.hash = `milestone=${encodeURIComponent(prevItem.id)}`;
-    });
+  prevButton.onclick = prevItem
+    ? () => {
+        window.location.hash = `milestone=${encodeURIComponent(prevItem.id)}`;
+      }
+    : null;
+  nextButton.onclick = nextItem
+    ? () => {
+        window.location.hash = `milestone=${encodeURIComponent(nextItem.id)}`;
+      }
+    : null;
+}
+
+function closeDrawer() {
+  const drawer = document.getElementById("milestoneDrawer");
+  if (!drawer) {
+    return;
   }
-  if (nextItem) {
-    nextButton.addEventListener("click", () => {
-      window.location.hash = `milestone=${encodeURIComponent(nextItem.id)}`;
-    });
-  }
+  drawer.hidden = true;
+  clearMilestoneSelection();
+}
+
+function setMilestoneSelection(activeId) {
+  clearMilestoneSelection();
+  document.querySelectorAll(".roadmap-left-row, .roadmap-bar").forEach((el) => {
+    if (el.dataset.milestoneId === activeId) {
+      el.classList.add("is-selected");
+    }
+  });
+}
+
+function clearMilestoneSelection() {
+  document.querySelectorAll(".roadmap-left-row.is-selected, .roadmap-bar.is-selected").forEach((el) => {
+    el.classList.remove("is-selected");
+  });
+}
+
+function syncRoadmapRowHeights() {
+  const leftRows = [...document.querySelectorAll("#timelineList .roadmap-left-row")];
+  const rightRows = [...document.querySelectorAll("#timelineRows .roadmap-row")];
+  leftRows.forEach((left) => {
+    left.style.minHeight = "";
+    left.style.height = "";
+  });
+  rightRows.forEach((right) => {
+    right.style.minHeight = "";
+    right.style.height = "";
+  });
+  leftRows.forEach((left, index) => {
+    const right = rightRows[index];
+    if (!right) {
+      return;
+    }
+    const height = Math.max(left.getBoundingClientRect().height, right.getBoundingClientRect().height);
+    const px = `${Math.ceil(height)}px`;
+    left.style.minHeight = px;
+    right.style.minHeight = px;
+  });
 }
 
 function fillList(elementId, items, fallback) {
   const element = document.getElementById(elementId);
+  if (!element) {
+    return;
+  }
   element.innerHTML = "";
   if (!items.length) {
     const li = document.createElement("li");
@@ -606,44 +792,7 @@ function hideTooltip() {
   tooltip.hidden = true;
 }
 
-function syncTimelineRowHeights() {
-  const listRows = [...document.querySelectorAll(".timeline-list-row")];
-  const timeRows = [...document.querySelectorAll(".timeline-row")];
-  const baseHeight = 136;
-
-  listRows.forEach((row) => {
-    row.style.height = "";
-  });
-  timeRows.forEach((row) => {
-    row.style.height = "";
-  });
-
-  listRows.forEach((listRow, index) => {
-    const timelineRow = timeRows[index];
-    if (!timelineRow) {
-      return;
-    }
-    const listHeight = listRow.getBoundingClientRect().height;
-    const timeHeight = timelineRow.getBoundingClientRect().height;
-    const height = Math.max(baseHeight, listRow.scrollHeight, timelineRow.scrollHeight, listHeight, timeHeight);
-    const finalHeight = `${height}px`;
-    listRow.style.height = finalHeight;
-    timelineRow.style.height = finalHeight;
-  });
-}
-
-function getTimelineDisplayTitle(item, approxWidth) {
-  const fullBarTitle = `${item.id} ${item.shortTitle}`.trim();
-  const compactBarTitle = item.barTitle || fullBarTitle;
-
-  if (approxWidth >= 300) {
-    return fullBarTitle;
-  }
-  if (approxWidth >= 210) {
-    return compactBarTitle;
-  }
-  return compactBarTitle;
-}
+// legacy timeline height sync removed (grid rows are fixed-height now)
 
 function getShortTitle(title) {
   const mapping = {
